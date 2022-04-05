@@ -2,6 +2,33 @@
 #include <string.h>
 #include <stdlib.h>
 
+#if 1
+    #define FIRST_BIT 0x8000000000000000
+    typedef unsigned long long bignum_data_t;
+    #define MSB_offset(x) ({ 63 - __builtin_clzl(x); })
+    #define SHIFT_1 1ULL
+#else
+#if 0
+    #define FIRST_BIT 0x80000000
+    typedef unsigned int bignum_data_t;
+    #define MSB_offset(x) ({ 31 - __builtin_clz(x); })
+    #define SHIFT_1 1
+#else
+#if 1
+    #define FIRST_BIT 0x8000
+    typedef unsigned short bignum_data_t;
+    #define MSB_offset(x) ({ 31 - __builtin_clz(x); })
+    #define SHIFT_1 1
+#else
+    #define FIRST_BIT 0x80
+    typedef unsigned char bignum_data_t;
+    #define MSB_offset(x) ({ 31 - __builtin_clz(x); })
+    #define SHIFT_1 1
+#endif
+#endif
+#endif
+
+typedef unsigned long long bignum_size_t;
 
 /*
  * max digit_count & max sizeof(bignum.data) = max(unsigned int)
@@ -9,18 +36,20 @@
  */
 struct bignum
 {
-    unsigned char *data;
+    bignum_data_t *data;
     unsigned char *string;  // Ex. '5', '6', '0', '8', '\0', '\0'
-    unsigned int size, data_size;  // current_size
+    bignum_size_t size, data_size;  // current_size
 };
 
 void trim(struct bignum *b)
 {
-    for(int i = b->size - 1; i >= 0; i--)
+    for (bignum_size_t i = b->size - 1;; i--) {
         if (b->data[i]) {
             b->data_size = i + 1;
             break;
-        }
+        } else if (i == 0)
+            break;
+    }
 }
 
 /*
@@ -32,7 +61,7 @@ void add_bignum_string(struct bignum *b, int a)
         b->string[0] = '0';
     b->string[0] += a;
 
-    for (int i = 0; i < b->size && b->string[i]; i++) {
+    for (bignum_size_t i = 0; i < b->size && b->string[i]; i++) {
         if (b->string[i] > '0' + 9) {  // carry
             b->string[i] -= 10;
 
@@ -48,8 +77,8 @@ void add_bignum_string(struct bignum *b, int a)
 
 void double_bignum_string(struct bignum *b)
 {
-    unsigned int carry = 0;
-    for (int i = 0; i < b->size && (b->string[i] || carry); i++) {
+    unsigned char is_carry = 0;
+    for (bignum_size_t i = 0; i < b->size && (b->string[i] || is_carry); i++) {
         if (!b->string[i])
             b->string[i] = 0;
         else
@@ -57,9 +86,9 @@ void double_bignum_string(struct bignum *b)
             b->string[i] = (b->string[i] - '0') << 1;
 
         // then add last_carry
-        b->string[i] += carry;
+        b->string[i] += is_carry;
         
-        carry = (b->string[i] >= 10);// + (b->string[i] >= 20);
+        is_carry = (b->string[i] >= 10);// + (b->string[i] >= 20);
         
         b->string[i] = (b->string[i] % 10) + '0';
     }
@@ -67,17 +96,19 @@ void double_bignum_string(struct bignum *b)
 
 void print_raw(struct bignum b)
 {
-    for (int i = 0; i < b.data_size; i++)
-        printf("%u ", b.data[i]);
+    for (bignum_size_t i = 0; i < b.data_size; i++)
+        printf("%llu ", (unsigned long long)b.data[i]);
     printf("\n");
 }
 
 #define print_bignum(x) _print_bignum(x, #x);
 void _print_bignum_string(struct bignum b)
 {
-    for (int i = b.size - 1; i >= 0; i--) {
+    for (bignum_size_t i = b.size - 1;; i--) {
         if(b.string[i])
             printf("%c", b.string[i]);
+        if (i == 0)
+            break;
     }
     printf("\n");
 }
@@ -85,11 +116,11 @@ void _print_bignum(struct bignum b, const char *name)
 {
     unsigned int dec = 0, shift = 0, base = 1, ind = 1;
 
-    printf("[bignum %s] (max_size: %u, data_size: %u)  \n", name, b.size, b.data_size);
+    printf("[bignum %s] (max_size: %llu, data_size: %llu)  \n", name, b.size, b.data_size);
 
     // find MSB
-    int i = b.data_size - 1;
-    for (; i >= 0; i--) {
+    bignum_size_t i = b.data_size - 1;
+    for (;; i--) {
         if (b.data[i])
             break;
         else if (i == 0) {
@@ -98,20 +129,27 @@ void _print_bignum(struct bignum b, const char *name)
         }
     }
     
-    int offset = 31 - __builtin_clz(b.data[i]);  // Ex. 00000100 -> 3
+    
+    bignum_size_t offset = MSB_offset(b.data[i]);  // Ex. 00000100 -> 3
 
-    printf("  |> ");
+    printf("  |> [%llu, %llu] ", i, offset);
     print_raw(b);
 
-    memset(b.string, 0, b.size);
-    for (; i >= 0; i--) {
-        for (; offset >= 0; offset--) {
+    memset(b.string, 0, b.size * sizeof(*b.string));
+    for (;; i--) {
+        for (;; offset--) {
             double_bignum_string(&b);
 
-            if (b.data[i] & (1 << offset))
+            if (b.data[i] & (SHIFT_1 << offset))
                 add_bignum_string(&b, 1);
+
+            if (offset == 0)
+                break;
         }
-        offset = 7;
+        offset = sizeof(bignum_data_t) * 8 - 1;
+
+        if (i == 0)
+            break;
     }
     printf("  |> %s = ", name);
     _print_bignum_string(b);
@@ -119,25 +157,28 @@ void _print_bignum(struct bignum b, const char *name)
 
 #define init_bignum(b, _size) \
 struct bignum b = {\
-.data = malloc(_size * sizeof(unsigned char)),\
-.string = malloc(_size * sizeof(unsigned char)),\
+.data = malloc(_size * sizeof(*b.data)),\
+.string = malloc(_size * sizeof(*b.string)),\
 .size = _size,\
 .data_size = 0\
 };
 
-void set_bignum_value(struct bignum *b, unsigned int value)
+void set_bignum_value(struct bignum *b, unsigned long long value)
 {
-    memset(b->data, 0, b->size);
+    memset(b->data, 0, b->size * sizeof(bignum_data_t));
 
-    memcpy(b->data, &value, sizeof(unsigned int));
+    memcpy(b->data, &value, sizeof(value));
 
-    trim(b);
+    b->data_size = sizeof(value) / sizeof(bignum_data_t);
 }
 void set_bignum_data(struct bignum *b, unsigned char *src, unsigned int size)
 {
-    b->data_size = size;
-    b->size = size * 8;
-    memcpy(b->data, src, b->size * sizeof(unsigned char));
+    memset(b->data, 0, b->size * sizeof(bignum_data_t));
+
+    memcpy(b->data, src, b->size * sizeof(*src));
+
+    b->data_size = b->size * sizeof(*src) / sizeof(bignum_data_t);
+    b->data_size = (b->data_size == 0 ? 1 : b->data_size);
 }
 
 void assign_bignum(struct bignum *dst, struct bignum *src)
@@ -147,14 +188,14 @@ void assign_bignum(struct bignum *dst, struct bignum *src)
     //dst->data = malloc(src->size);
 
     dst->data_size = src->data_size;
-    memcpy(dst->data, src->data, src->data_size);
+    memcpy(dst->data, src->data, src->data_size * sizeof(bignum_data_t));
 }
 
 void add_bignum(struct bignum *ans, struct bignum *b1, struct bignum * b2)
 {
     // !!!! todo: cache friendly || data -> unsigned long long || asm 
 
-    unsigned char carry = 0;
+    unsigned char is_carry = 0;
 
     //unsigned char tmp, tmp2;
 
@@ -162,9 +203,9 @@ void add_bignum(struct bignum *ans, struct bignum *b1, struct bignum * b2)
 
     unsigned char tmp;
 
-    int i = 0;
-    int size = (b1->data_size > b2->data_size ? b1->data_size : b2->data_size);
-    for (; i < size || (i == size && carry); i++) {
+    bignum_size_t i = 0;
+    bignum_size_t size = (b1->data_size > b2->data_size ? b1->data_size : b2->data_size);
+    for (; i < size || (i == size && is_carry); i++) {
         // method 1: use bitwise op
         //tmp = b1->data[i] ^ b2->data[i];
         //tmp2 = b1->data[i] & b2->data[i];
@@ -181,10 +222,10 @@ void add_bignum(struct bignum *ans, struct bignum *b1, struct bignum * b2)
         //                                   b: 00001000101
         //                               carry: 00000000001
         //               carry = a > ~b
-        tmp = (b1->data[i] + carry > (~b2->data[i] & 0xFF)) || (b1->data[i] > (~carry & 0xFF));
+        tmp = (b1->data[i] + is_carry > (bignum_data_t)(~b2->data[i])) || (b1->data[i] > (bignum_data_t)(~is_carry));
 
-        ans->data[i] = b1->data[i] + b2->data[i] + carry;
-        carry = tmp;
+        ans->data[i] = b1->data[i] + b2->data[i] + is_carry;
+        is_carry = tmp;
     }
     ans->data_size = i;
 }
@@ -193,19 +234,18 @@ void complement_bignum(struct bignum *dst, struct bignum *src)
 {
     dst->data_size = src->data_size;
 
-    for (int i = 0; i < src->data_size; i++)
+    for (bignum_size_t i = 0; i < src->data_size; i++)
         dst->data[i] = ~src->data[i];
 }
 
 void double_bignum(struct bignum *b)
 {
     // Ex. 0000 0111 1011 -> 0000 1111 0110 | 104 vs 255
+    unsigned char is_carry = 0, is_last_carry = 0;
 
-    unsigned int is_carry = 0, is_last_carry = 0;
-
-    int i = 0;
+    bignum_size_t i = 0;
     for (; i < b->data_size || is_carry; i++) {
-        is_carry = !!(b->data[i] & 0x80);
+        is_carry = !!(b->data[i] & FIRST_BIT);
 
         // shift
         b->data[i] = (b->data[i] << 1) + is_last_carry;
@@ -225,16 +265,15 @@ void multiply_bignum(struct bignum *ans, struct bignum *a, struct bignum *b)
 
     set_bignum_value(ans, 0);
 
-    int tmp_double_count = 0, bit_count = 0;
-    for (int i = 0; i < b->data_size; i++) {
+    bignum_size_t tmp_double_count = 0, bit_count = 0;
+    for (bignum_size_t i = 0; i < b->data_size; i++) {
         if (b->data[i]) {
-            for (int offset = 0; offset < 8; offset++) {  // O(n)
-                if (b->data[i] & (1 << offset)) {
+            for (bignum_size_t offset = 0; offset < sizeof(bignum_data_t) * 8; offset++) {  // O(n)
+                if (b->data[i] & (SHIFT_1 << offset)) {
                     // double a for (offset + i * 8) times
-                    bit_count = offset + i * 8;
-                    for (int j = tmp_double_count; j < bit_count; j++)  // a << bit_count
+                    bit_count = offset + i * sizeof(bignum_data_t) * 8;
+                    for (bignum_size_t j = tmp_double_count; j < bit_count; j++)  // a << bit_count
                         double_bignum(&tmp);  // O(n)
-
                     tmp_double_count = bit_count;  // at the foundation of last tmp result
 
                     add_bignum(ans, ans, &tmp);
@@ -247,7 +286,7 @@ void multiply_bignum(struct bignum *ans, struct bignum *a, struct bignum *b)
 /*
  * from n's MSB to LSB, if '1' add ans with last_ans, if '0' double ans
  */
-void fast_fib(unsigned int n)
+void fast_fib(unsigned int n, unsigned char is_print)
 {
     init_bignum(_n, n);
     init_bignum(x, n); init_bignum(y, n);
@@ -264,8 +303,8 @@ void fast_fib(unsigned int n)
     set_bignum_value(&_n, n);
     trim(&_n);
 
-    for (int i = _n.data_size - 1; i >= 0; i--) {
-        for (int b = 7; b >= 0; b--) {  // O(n)
+    for (bignum_size_t i = _n.data_size - 1;; i--) {
+        for (bignum_size_t b = sizeof(bignum_data_t) * 8 - 1;; b--) {  // O(n)
             assign_bignum(&tmp, &y);
             double_bignum(&tmp);
 
@@ -278,9 +317,6 @@ void fast_fib(unsigned int n)
 
             multiply_bignum(&_x, &tmp, &x);  // _x = x * (2y - x)
 
-            printf("\ntmp = 2y - x\n");
-            print_bignum(tmp);
-
             ///////////////////
 
             multiply_bignum(&tmp, &x, &x);
@@ -292,32 +328,46 @@ void fast_fib(unsigned int n)
 
             assign_bignum(&x, &_x);  // x = _x
 
-            printf("\nx = x * (2y - x), y = x^2 * y^2\n");
-            print_bignum(x);
-            print_bignum(y);
-
-            if (_n.data[i] & (1 << b)) {
+            if (_n.data[i] & (SHIFT_1 << b)) {
                 add_bignum(&tmp, &x, &y);
 
                 assign_bignum(&x, &y);    // x = y
                 assign_bignum(&y, &tmp);  // y = x + y
-
-                printf("\nx = y, y = x + y\n");
-                print_bignum(x);
-                print_bignum(y);
             }
-            
+
+            if (b == 0)
+                break;
         }
+
+        if (i == 0)
+            break;
     }
-    printf("\nfib(%i) = \n", n);
-    print_bignum(x);
+    printf("\nfib(%i)\n", n);
+    if (is_print)
+        print_bignum(x);
+}
+
+// timer
+#define START struct timespec _time = timer_start();
+#define END printf("\n\n[Timer] %lf\n", timer_end(_time) / 1000000000.0f);
+#include <time.h>
+struct timespec timer_start(){
+    struct timespec start_time;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &start_time);
+    return start_time;
+}
+long timer_end(struct timespec start_time){
+    struct timespec end_time;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &end_time);
+    long diffInNanos = (end_time.tv_sec - start_time.tv_sec) * (long)1e9 + (end_time.tv_nsec - start_time.tv_nsec);
+    return diffInNanos;
 }
 
 int main()
 {
-    unsigned int i = 4294967295;
-
-    fast_fib(500);
+    START
+    fast_fib(10000000, 0);
+    END
     return 0;
 
 
@@ -326,6 +376,19 @@ int main()
     init_bignum(c, 200);
     init_bignum(d, 200);
     init_bignum(e, 200);
+
+    set_bignum_value(&a, 400000000000);
+    set_bignum_value(&b, 4294967296);
+
+    double_bignum(&a);
+
+    //multiply_bignum(&c, &a, &b);
+
+
+    print_bignum(a);
+    print_bignum(b);
+    print_bignum(c);
+    return 0;
 
     init_bignum(_one, 200);
     set_bignum_value(&_one, 1);
